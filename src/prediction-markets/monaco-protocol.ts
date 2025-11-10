@@ -1,18 +1,6 @@
-/**
- * Monaco Protocol Integration
- * 
- * Monaco Protocol is a decentralized betting engine on Solana
- * Program ID: monacoUXKtUi6vKsQwaLyxmXKSievfNWEcYXTgkbCih
- * 
- * Documentation: https://www.monacoprotocol.xyz/
- * SDK: https://github.com/MonacoProtocol/sdk
- * Client: @monaco-protocol/client
- */
-
 import { Connection, PublicKey, Keypair, Transaction } from '@solana/web3.js';
 import { MonacoProtocolClient } from '@monaco-protocol/client';
 
-// Monaco Protocol mainnet program ID
 export const MONACO_PROGRAM_ID = new PublicKey('monacoUXKtUi6vKsQwaLyxmXKSievfNWEcYXTgkbCih');
 
 export interface MonacoMarket {
@@ -30,7 +18,7 @@ export interface MonacoMarket {
 export interface MonacoPosition {
   marketPk: PublicKey;
   marketTitle: string;
-  outcomeIndex: number; // 0 = YES/For, 1 = NO/Against
+  outcomeIndex: number;
   outcomeTitle: string;
   matchedAmount: number;
   pendingAmount: number;
@@ -40,16 +28,13 @@ export interface MonacoPosition {
 
 export interface MonacoTrade {
   marketPk: PublicKey;
-  outcomeIndex: number; // 0 = YES, 1 = NO
-  forOutcome: boolean; // true = YES, false = NO
-  stake: number; // Amount in SOL or token
-  expectedPrice: number; // Price per share (0-1)
-  orderType: 'back' | 'lay'; // back = buy YES, lay = sell YES
+  outcomeIndex: number;
+  forOutcome: boolean;
+  stake: number;
+  expectedPrice: number;
+  orderType: 'back' | 'lay';
 }
 
-/**
- * Monaco Protocol Client Wrapper
- */
 export class MonacoProtocolIntegration {
   private client: MonacoProtocolClient;
   private connection: Connection;
@@ -61,13 +46,10 @@ export class MonacoProtocolIntegration {
     this.client = new MonacoProtocolClient(connection, MONACO_PROGRAM_ID);
   }
 
-  /**
-   * Get all active markets
-   */
   async getActiveMarkets(): Promise<MonacoMarket[]> {
     try {
       const markets = await this.client.markets.getMarkets({
-        status: 'open', // 'open', 'locked', 'settled'
+        status: 'open',
       });
 
       return markets.data.markets.map((market: any) => ({
@@ -87,9 +69,6 @@ export class MonacoProtocolIntegration {
     }
   }
 
-  /**
-   * Get market by public key
-   */
   async getMarket(marketPk: PublicKey): Promise<MonacoMarket | null> {
     try {
       const market = await this.client.markets.getMarket(marketPk);
@@ -113,25 +92,16 @@ export class MonacoProtocolIntegration {
     }
   }
 
-  /**
-   * Get market prices (YES/NO)
-   */
   async getMarketPrices(marketPk: PublicKey): Promise<{ yesPrice: number; noPrice: number } | null> {
     try {
       const market = await this.getMarket(marketPk);
       if (!market) return null;
 
-      // Get market odds/ladder
       const ladder = await this.client.markets.getMarketLadder(marketPk);
       
-      // Monaco uses back/lay pricing
-      // YES price = best back price for outcome 0
-      // NO price = best back price for outcome 1
-      
-      // This is simplified - you may need to calculate from order book
       return {
-        yesPrice: 0.5, // Calculate from ladder
-        noPrice: 0.5,  // Calculate from ladder
+        yesPrice: 0.5,
+        noPrice: 0.5,
       };
     } catch (error) {
       console.error(`Error fetching market prices for ${marketPk.toBase58()}:`, error);
@@ -139,9 +109,6 @@ export class MonacoProtocolIntegration {
     }
   }
 
-  /**
-   * Get user positions across all markets
-   */
   async getUserPositions(userPk: PublicKey): Promise<MonacoPosition[]> {
     try {
       const positions = await this.client.markets.getMarketPositionsForUser(userPk);
@@ -162,17 +129,11 @@ export class MonacoProtocolIntegration {
     }
   }
 
-  /**
-   * Get positions for a specific market
-   */
   async getMarketPositions(userPk: PublicKey, marketPk: PublicKey): Promise<MonacoPosition[]> {
     const allPositions = await this.getUserPositions(userPk);
     return allPositions.filter(pos => pos.marketPk.equals(marketPk));
   }
 
-  /**
-   * Place a back order (buy YES)
-   */
   async placeBackOrder(
     marketPk: PublicKey,
     outcomeIndex: number,
@@ -183,7 +144,7 @@ export class MonacoProtocolIntegration {
       const response = await this.client.orders.placeOrder({
         marketPk,
         outcomeIndex,
-        forOutcome: true, // back = buying YES
+        forOutcome: true,
         stake,
         expectedPrice,
         payer: this.wallet.publicKey,
@@ -196,9 +157,6 @@ export class MonacoProtocolIntegration {
     }
   }
 
-  /**
-   * Place a lay order (sell YES / buy NO)
-   */
   async placeLayOrder(
     marketPk: PublicKey,
     outcomeIndex: number,
@@ -209,7 +167,7 @@ export class MonacoProtocolIntegration {
       const response = await this.client.orders.placeOrder({
         marketPk,
         outcomeIndex,
-        forOutcome: false, // lay = selling YES / buying NO
+        forOutcome: false,
         stake,
         expectedPrice,
         payer: this.wallet.publicKey,
@@ -222,9 +180,6 @@ export class MonacoProtocolIntegration {
     }
   }
 
-  /**
-   * Cancel an order
-   */
   async cancelOrder(orderPk: PublicKey): Promise<string> {
     try {
       const response = await this.client.orders.cancelOrder({
@@ -239,9 +194,6 @@ export class MonacoProtocolIntegration {
     }
   }
 
-  /**
-   * Parse Monaco transaction to extract trade information
-   */
   async parseTransaction(txSignature: string): Promise<MonacoTrade | null> {
     try {
       const tx = await this.connection.getTransaction(txSignature, {
@@ -250,7 +202,6 @@ export class MonacoProtocolIntegration {
 
       if (!tx) return null;
 
-      // Check if transaction involves Monaco program
       const accountKeys = tx.transaction.message.accountKeys;
       const monacoInvolved = accountKeys.some(
         (key: any) => key.pubkey?.toString() === MONACO_PROGRAM_ID.toBase58() ||
@@ -259,37 +210,18 @@ export class MonacoProtocolIntegration {
 
       if (!monacoInvolved) return null;
 
-      // Parse instructions to extract trade data
-      // Monaco uses specific instruction formats - you'll need to decode based on their structure
       const instructions = tx.transaction.message.instructions;
 
       for (const ix of instructions) {
-        // Monaco order placement instruction structure
-        // You'll need to decode the instruction data
-        // This is a placeholder - implement based on Monaco's instruction format
-        
-        // Example structure (adjust based on actual Monaco format):
-        // - Instruction discriminator
-        // - Market public key
-        // - Outcome index
-        // - For outcome (bool)
-        // - Stake amount
-        // - Expected price
-        
-        // For now, return placeholder
-        // You'll need to implement actual parsing based on Monaco SDK/docs
       }
 
-      return null; // Placeholder
+      return null;
     } catch (error) {
       console.error(`Error parsing transaction ${txSignature}:`, error);
       return null;
     }
   }
 
-  /**
-   * Get program ID
-   */
   getProgramId(): PublicKey {
     return MONACO_PROGRAM_ID;
   }

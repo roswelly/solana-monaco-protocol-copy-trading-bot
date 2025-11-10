@@ -8,8 +8,8 @@ export interface ParsedTrade {
   marketAddress: PublicKey;
   outcome: 'YES' | 'NO';
   action: 'BUY' | 'SELL';
-  amount: number; // SOL amount for buy, shares for sell
-  price?: number; // Price per share if available
+  amount: number;
+  price?: number;
 }
 
 export class CopyTradingBot {
@@ -29,7 +29,6 @@ export class CopyTradingBot {
     this.config = config;
     this.monacoParser = new MonacoTransactionParser(connection);
     
-    // Initialize Monaco position manager if Monaco is configured
     if (this.isMonacoConfigured()) {
       this.monacoPositionManager = new MonacoPositionManager(connection, wallet);
     }
@@ -119,12 +118,10 @@ export class CopyTradingBot {
       return false;
     }
 
-    // Check for Monaco Protocol
     if (this.monacoParser.isMonacoTransaction(tx)) {
       return true;
     }
 
-    // Check for other configured programs
     const programIds = tx.transaction.message.accountKeys
       .map((key: any) => key.pubkey?.toString() || key.toString())
       .filter((id: string) => this.config.predictionMarketPrograms.includes(id));
@@ -136,7 +133,6 @@ export class CopyTradingBot {
     try {
       console.log(`🔄 Processing transaction from ${sourceAddress}...`);
       
-      // Parse transaction to extract trade information
       const trade = await this.parsePredictionMarketTransaction(tx, txSignature);
       
       if (!trade) {
@@ -150,7 +146,6 @@ export class CopyTradingBot {
         console.log(`   Price: ${trade.price}`);
       }
 
-      // Execute copy trade
       await this.executeCopyTrade(trade);
       
     } catch (error) {
@@ -158,22 +153,14 @@ export class CopyTradingBot {
     }
   }
 
-  /**
-   * Parse prediction market transaction
-   * 
-   * Supports Monaco Protocol and other platforms
-   */
   private async parsePredictionMarketTransaction(tx: any, txSignature?: string): Promise<ParsedTrade | null> {
     if (!tx || !tx.transaction || !tx.transaction.message) {
       return null;
     }
 
-    // Try Monaco Protocol first
     if (this.monacoParser.isMonacoTransaction(tx) && txSignature) {
       const monacoTrade = await this.monacoParser.parseTransaction(txSignature);
       if (monacoTrade) {
-        // Convert Monaco trade to standard format
-        // Monaco: back = buy YES, lay = sell YES (or buy NO)
         const outcome: 'YES' | 'NO' = monacoTrade.forOutcome ? 'YES' : 'NO';
         const action: 'BUY' | 'SELL' = monacoTrade.orderType === 'back' ? 'BUY' : 'SELL';
         
@@ -187,12 +174,10 @@ export class CopyTradingBot {
       }
     }
 
-    // Fallback to generic parsing for other platforms
     const instructions = tx.transaction.message.instructions;
     const accountKeys = tx.transaction.message.accountKeys;
 
     for (const programId of this.config.predictionMarketPrograms) {
-      // Skip Monaco if already checked
       if (programId === MONACO_PROGRAM_ID.toBase58()) continue;
       
       const programInvolved = accountKeys.some(
@@ -204,7 +189,6 @@ export class CopyTradingBot {
 
       if (!programInvolved) continue;
 
-      // Generic parsing for other platforms
       for (const ix of instructions) {
         const ixProgramId = typeof ix.programId === 'string' 
           ? ix.programId 
@@ -217,7 +201,6 @@ export class CopyTradingBot {
             
             if (!marketAddress) continue;
 
-            // Placeholder for other platforms
             return {
               marketAddress: new PublicKey(marketAddress),
               outcome: 'YES',
@@ -235,31 +218,24 @@ export class CopyTradingBot {
     return null;
   }
 
-  /**
-   * Execute a copy trade
-   */
   private async executeCopyTrade(trade: ParsedTrade): Promise<void> {
     try {
-      // Use Monaco position manager if available
       if (!this.monacoPositionManager) {
         console.error('   Monaco position manager not initialized');
         return;
       }
 
-      // Apply copy multiplier
       const adjustedAmount = trade.amount * this.config.copyMultiplier;
 
-      // Check position size limits
       if (adjustedAmount > this.config.maxPositionSize) {
         console.log(`   ⚠️  Trade size ${adjustedAmount} exceeds max ${this.config.maxPositionSize}, skipping`);
         return;
       }
 
-      // Execute the trade using Monaco
       console.log(`   📝 Executing copy trade: ${trade.action} ${adjustedAmount} ${trade.outcome} shares`);
       
       let signature: string;
-      const maxPrice = trade.price ? trade.price * 1.01 : undefined; // 1% slippage
+      const maxPrice = trade.price ? trade.price * 1.01 : undefined;
       const minPrice = trade.price ? trade.price * 0.99 : undefined;
 
       if (trade.action === 'BUY') {
@@ -296,8 +272,6 @@ export class CopyTradingBot {
       
     } catch (error) {
       console.error('   ❌ Error executing copy trade:', error);
-      // Update daily loss if trade failed
-      // this.dailyLoss += trade.amount;
     }
   }
 

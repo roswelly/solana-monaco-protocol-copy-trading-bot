@@ -1,9 +1,3 @@
-/**
- * Monaco Protocol Position Manager
- * 
- * Wraps Monaco Protocol client for position management
- */
-
 import { Connection, PublicKey, Keypair } from '@solana/web3.js';
 import { MonacoProtocolIntegration, MonacoMarket, MonacoPosition } from './monaco-protocol';
 
@@ -22,9 +16,6 @@ export interface MarketPrices {
   timestamp: Date;
 }
 
-/**
- * Monaco-specific position manager
- */
 export class MonacoPositionManager {
   private monaco: MonacoProtocolIntegration;
 
@@ -32,9 +23,6 @@ export class MonacoPositionManager {
     this.monaco = new MonacoProtocolIntegration(connection, wallet);
   }
 
-  /**
-   * Get all positions for a user
-   */
   async getAllPositions(userAddress: PublicKey): Promise<Position[]> {
     const monacoPositions = await this.monaco.getUserPositions(userAddress);
     
@@ -47,15 +35,12 @@ export class MonacoPositionManager {
         outcome,
         shares,
         averagePrice: pos.averageMatchedPrice,
-        currentValue: shares * pos.averageMatchedPrice, // Simplified
-        unrealizedPnl: 0, // Calculate from current prices
+        currentValue: shares * pos.averageMatchedPrice,
+        unrealizedPnl: 0,
       };
     });
   }
 
-  /**
-   * Get positions for a specific market
-   */
   async getMarketPositions(
     userAddress: PublicKey,
     marketAddress: PublicKey
@@ -85,9 +70,6 @@ export class MonacoPositionManager {
     };
   }
 
-  /**
-   * Get market prices
-   */
   async getMarketPrices(marketAddress: PublicKey): Promise<MarketPrices> {
     const prices = await this.monaco.getMarketPrices(marketAddress);
     
@@ -106,61 +88,42 @@ export class MonacoPositionManager {
     };
   }
 
-  /**
-   * Buy YES shares (place back order on outcome 0)
-   */
   async buyYesShares(
     marketAddress: PublicKey,
     amount: number,
     maxPrice?: number
   ): Promise<string> {
-    const expectedPrice = maxPrice || 0.99; // Default to 99% if not specified
+    const expectedPrice = maxPrice || 0.99;
     return await this.monaco.placeBackOrder(marketAddress, 0, amount, expectedPrice);
   }
 
-  /**
-   * Buy NO shares (place lay order on outcome 0, or back order on outcome 1)
-   */
   async buyNoShares(
     marketAddress: PublicKey,
     amount: number,
     maxPrice?: number
   ): Promise<string> {
     const expectedPrice = maxPrice || 0.99;
-    // NO = lay on outcome 0, or back on outcome 1
-    // Using lay on outcome 0 (selling YES = buying NO)
     return await this.monaco.placeLayOrder(marketAddress, 0, amount, expectedPrice);
   }
 
-  /**
-   * Sell YES shares (place lay order)
-   */
   async sellYesShares(
     marketAddress: PublicKey,
     shares: number,
     minPrice?: number
   ): Promise<string> {
     const expectedPrice = minPrice || 0.01;
-    // Selling YES = laying outcome 0
     return await this.monaco.placeLayOrder(marketAddress, 0, shares, expectedPrice);
   }
 
-  /**
-   * Sell NO shares (place back order on outcome 0, or lay on outcome 1)
-   */
   async sellNoShares(
     marketAddress: PublicKey,
     shares: number,
     minPrice?: number
   ): Promise<string> {
     const expectedPrice = minPrice || 0.01;
-    // Selling NO = backing outcome 0 (buying YES)
     return await this.monaco.placeBackOrder(marketAddress, 0, shares, expectedPrice);
   }
 
-  /**
-   * Get Monaco client instance
-   */
   getMonacoClient(): MonacoProtocolIntegration {
     return this.monaco;
   }
