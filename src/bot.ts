@@ -1,6 +1,8 @@
 import { Connection, PublicKey, Keypair, Transaction, SystemProgram } from '@solana/web3.js';
 import { BotConfig } from './config';
-import { PositionManager } from './prediction-markets/position-manager';
+import { MonacoPositionManager } from './prediction-markets/monaco-position-manager';
+import { MonacoTransactionParser, ParsedMonacoTrade } from './prediction-markets/monaco-transaction-parser';
+import { MONACO_PROGRAM_ID } from './prediction-markets/monaco-protocol';
 
 export interface ParsedTrade {
   marketAddress: PublicKey;
@@ -18,20 +20,25 @@ export class CopyTradingBot {
   private lastProcessedSignatures: Set<string> = new Set();
   private dailyLoss: number = 0;
   private lastResetDate: string = new Date().toDateString();
-  private positionManagers: Map<string, PositionManager> = new Map();
+  private monacoPositionManager?: MonacoPositionManager;
+  private monacoParser: MonacoTransactionParser;
 
   constructor(connection: Connection, wallet: Keypair, config: BotConfig) {
     this.connection = connection;
     this.wallet = wallet;
     this.config = config;
+    this.monacoParser = new MonacoTransactionParser(connection);
     
-    // Initialize position managers for each program
-    for (const programId of config.predictionMarketPrograms) {
-      this.positionManagers.set(
-        programId,
-        new PositionManager(connection, wallet, new PublicKey(programId))
-      );
+    // Initialize Monaco position manager if Monaco is configured
+    if (this.isMonacoConfigured()) {
+      this.monacoPositionManager = new MonacoPositionManager(connection, wallet);
     }
+  }
+
+  private isMonacoConfigured(): boolean {
+    return this.config.predictionMarketPrograms.some(
+      id => id === MONACO_PROGRAM_ID.toBase58()
+    );
   }
 
   async start(): Promise<void> {
@@ -97,7 +104,7 @@ export class CopyTradingBot {
 
         if (tx && this.isPredictionMarketTransaction(tx)) {
           console.log(`📊 Found prediction market transaction: ${sigInfo.signature}`);
-          await this.processTransaction(tx, targetAddress);
+          await this.processTransaction(tx, targetAddress, sigInfo.signature);
         }
 
         this.lastProcessedSignatures.add(sigInfo.signature);
@@ -112,19 +119,25 @@ export class CopyTradingBot {
       return false;
     }
 
+    // Check for Monaco Protocol
+    if (this.monacoParser.isMonacoTransaction(tx)) {
+      return true;
+    }
+
+    // Check for other configured programs
     const programIds = tx.transaction.message.accountKeys
-      .map((key: any) => key.toString())
+      .map((key: any) => key.pubkey?.toString() || key.toString())
       .filter((id: string) => this.config.predictionMarketPrograms.includes(id));
 
     return programIds.length > 0;
   }
 
-  private async processTransaction(tx: any, sourceAddress: string): Promise<void> {
+  private async processTransaction(tx: any, sourceAddress: string, txSignature?: string): Promise<void> {
     try {
       console.log(`🔄 Processing transaction from ${sourceAddress}...`);
       
       // Parse transaction to extract trade information
-      const trade = this.parsePredictionMarketTransaction(tx);
+      const trade = await this.parsePredictionMarketTransaction(tx, txSignature);
       
       if (!trade) {
         console.log('   Could not parse trade from transaction');
@@ -133,6 +146,9 @@ export class CopyTradingBot {
 
       console.log(`   Trade: ${trade.action} ${trade.outcome} on market ${trade.marketAddress.toBase58()}`);
       console.log(`   Amount: ${trade.amount} ${trade.action === 'BUY' ? 'SOL' : 'shares'}`);
+      if (trade.price) {
+        console.log(`   Price: ${trade.price}`);
+      }
 
       // Execute copy trade
       await this.executeCopyTrade(trade);
@@ -145,67 +161,68 @@ export class CopyTradingBot {
   /**
    * Parse prediction market transaction
    * 
-   * This is platform-specific - you need to implement based on your platform's structure
+   * Supports Monaco Protocol and other platforms
    */
-  private parsePredictionMarketTransaction(tx: any): ParsedTrade | null {
+  private async parsePredictionMarketTransaction(tx: any, txSignature?: string): Promise<ParsedTrade | null> {
     if (!tx || !tx.transaction || !tx.transaction.message) {
       return null;
     }
 
-    // Find which prediction market program this transaction uses
+    // Try Monaco Protocol first
+    if (this.monacoParser.isMonacoTransaction(tx) && txSignature) {
+      const monacoTrade = await this.monacoParser.parseTransaction(txSignature);
+      if (monacoTrade) {
+        // Convert Monaco trade to standard format
+        // Monaco: back = buy YES, lay = sell YES (or buy NO)
+        const outcome: 'YES' | 'NO' = monacoTrade.forOutcome ? 'YES' : 'NO';
+        const action: 'BUY' | 'SELL' = monacoTrade.orderType === 'back' ? 'BUY' : 'SELL';
+        
+        return {
+          marketAddress: monacoTrade.marketPk,
+          outcome,
+          action,
+          amount: monacoTrade.stake,
+          price: monacoTrade.expectedPrice,
+        };
+      }
+    }
+
+    // Fallback to generic parsing for other platforms
     const instructions = tx.transaction.message.instructions;
     const accountKeys = tx.transaction.message.accountKeys;
 
     for (const programId of this.config.predictionMarketPrograms) {
-      const programPubkey = new PublicKey(programId);
+      // Skip Monaco if already checked
+      if (programId === MONACO_PROGRAM_ID.toBase58()) continue;
       
-      // Check if this transaction involves this program
       const programInvolved = accountKeys.some(
-        (key: any) => key.pubkey?.toString() === programId || key.toString() === programId
+        (key: any) => {
+          const keyStr = key.pubkey?.toString() || key.toString();
+          return keyStr === programId;
+        }
       );
 
       if (!programInvolved) continue;
 
-      // Find the instruction for this program
+      // Generic parsing for other platforms
       for (const ix of instructions) {
         const ixProgramId = typeof ix.programId === 'string' 
           ? ix.programId 
           : ix.programId?.toString() || accountKeys[ix.programIdIndex]?.toString();
 
         if (ixProgramId === programId) {
-          // Platform-specific parsing
-          // You need to decode the instruction data based on your platform's format
-          
-          // Example structure (adjust for your platform):
-          // - Instruction discriminator (first 8 bytes)
-          // - Market address (PublicKey, 32 bytes)
-          // - Outcome (u8: 0 = NO, 1 = YES)
-          // - Amount (u64, 8 bytes)
-          // - Action (u8: 0 = BUY, 1 = SELL)
-          
-          // For now, return a placeholder that you'll need to implement
-          // See src/prediction-markets/ for examples
-          
           try {
-            // Try to extract from instruction accounts
-            // Market is often in accounts[0] or accounts[1]
             const marketIndex = ix.accounts?.[0] || 0;
             const marketAddress = accountKeys[marketIndex]?.pubkey || accountKeys[marketIndex];
             
             if (!marketAddress) continue;
 
-            // Decode instruction data (platform-specific)
-            // const data = Buffer.from(ix.data, 'base64');
-            // const outcome = data[8]; // Example
-            // const amount = data.readBigUInt64LE(9); // Example
-            // const action = data[17]; // Example
-
-            // Placeholder - implement based on your platform
+            // Placeholder for other platforms
             return {
               marketAddress: new PublicKey(marketAddress),
-              outcome: 'YES', // Parse from instruction data
-              action: 'BUY',   // Parse from instruction data
-              amount: 0.1,     // Parse from instruction data (SOL or shares)
+              outcome: 'YES',
+              action: 'BUY',
+              amount: 0.1,
             };
           } catch (error) {
             console.error('Error parsing instruction:', error);
@@ -223,17 +240,9 @@ export class CopyTradingBot {
    */
   private async executeCopyTrade(trade: ParsedTrade): Promise<void> {
     try {
-      // Find the appropriate position manager
-      let positionManager: PositionManager | undefined;
-      for (const [programId, manager] of this.positionManagers.entries()) {
-        // Check if this market belongs to this program
-        // You may need to query the market to find its program
-        positionManager = manager;
-        break; // For now, use first available
-      }
-
-      if (!positionManager) {
-        console.error('   No position manager found for this trade');
+      // Use Monaco position manager if available
+      if (!this.monacoPositionManager) {
+        console.error('   Monaco position manager not initialized');
         return;
       }
 
@@ -246,21 +255,40 @@ export class CopyTradingBot {
         return;
       }
 
-      // Execute the trade
+      // Execute the trade using Monaco
       console.log(`   📝 Executing copy trade: ${trade.action} ${adjustedAmount} ${trade.outcome} shares`);
       
       let signature: string;
+      const maxPrice = trade.price ? trade.price * 1.01 : undefined; // 1% slippage
+      const minPrice = trade.price ? trade.price * 0.99 : undefined;
+
       if (trade.action === 'BUY') {
         if (trade.outcome === 'YES') {
-          signature = await positionManager.buyYesShares(trade.marketAddress, adjustedAmount);
+          signature = await this.monacoPositionManager.buyYesShares(
+            trade.marketAddress, 
+            adjustedAmount,
+            maxPrice
+          );
         } else {
-          signature = await positionManager.buyNoShares(trade.marketAddress, adjustedAmount);
+          signature = await this.monacoPositionManager.buyNoShares(
+            trade.marketAddress, 
+            adjustedAmount,
+            maxPrice
+          );
         }
       } else {
         if (trade.outcome === 'YES') {
-          signature = await positionManager.sellYesShares(trade.marketAddress, adjustedAmount);
+          signature = await this.monacoPositionManager.sellYesShares(
+            trade.marketAddress, 
+            adjustedAmount,
+            minPrice
+          );
         } else {
-          signature = await positionManager.sellNoShares(trade.marketAddress, adjustedAmount);
+          signature = await this.monacoPositionManager.sellNoShares(
+            trade.marketAddress, 
+            adjustedAmount,
+            minPrice
+          );
         }
       }
 
