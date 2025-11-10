@@ -1,4 +1,4 @@
-# Solana Prediction Market Copy Trading Bot MVP
+# Solana Monaco Protocol Copy Trading Bot
 
 A Node.js + TypeScript bot that monitors and copies trades from selected addresses on Solana prediction markets.
 
